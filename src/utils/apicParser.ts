@@ -434,21 +434,43 @@ export function selectBestEpgMatch(
   if (epgList.length === 0) return '';
   if (epgList.length === 1) return epgList[0];
 
-  // Score each EPG based on IP match and path details
   let bestEpg = epgList[0];
-  let bestScore = 0;
+  let bestScore = -1;
 
   for (const epg of epgList) {
     let score = 0;
 
-    // Check if IP is in EPG name
-    if (epg.includes(endpointIp.substring(0, endpointIp.lastIndexOf('.')))) {
-      score += 10;
-    }
+    // Extract IP address from EPG name (format: EPG-VLANxxx-IP.ADD.RE.SS-CIDR)
+    const ipInEpgMatch = epg.match(/(\d+\.\d+\.\d+\.\d+)/);
+    if (ipInEpgMatch) {
+      const epgIp = ipInEpgMatch[1];
+      const epgIpParts = epgIp.split('.');
+      const endpointIpParts = endpointIp.split('.');
 
-    // Check if it's more specific (has more details like IP range)
-    if (epg.match(/\d+\.\d+\.\d+\.\d+/)) {
-      score += 5;
+      // Calculate IP similarity (matching octets from left to right)
+      for (let i = 0; i < 4; i++) {
+        if (epgIpParts[i] === endpointIpParts[i]) {
+          score += Math.pow(10, 4 - i);
+        } else {
+          break;
+        }
+      }
+
+      // Exact IP match gets bonus
+      if (epgIp === endpointIp) {
+        score += 100000;
+      }
+
+      // Check if endpoint IP is in the same subnet as EPG
+      const cidrMatch = epg.match(/-(\d+)$/);
+      if (cidrMatch) {
+        const cidr = parseInt(cidrMatch[1]);
+        const epgSubnet = epgIpParts.slice(0, Math.ceil(cidr / 8)).join('.');
+        const endpointSubnet = endpointIpParts.slice(0, Math.ceil(cidr / 8)).join('.');
+        if (epgSubnet === endpointSubnet) {
+          score += 1000;
+        }
+      }
     }
 
     if (score > bestScore) {

@@ -122,23 +122,31 @@ function App() {
       return;
     }
 
-    // Extract EPG names from moquery data
     const epgsByVlan = extractEpgNamesFromMoquery(moqueryInput);
 
     setPathAttachments(parsedMoquery);
     setAutoEndpoints(parsedEndpoints);
 
-    const groupedByVlan = new Map<string, AutoModeEndpoint[]>();
+    // Group by VLAN and IP subnet (to differentiate different EPGs)
+    const groupedByVlanAndSubnet = new Map<string, AutoModeEndpoint[]>();
     parsedEndpoints.forEach(ep => {
-      if (!groupedByVlan.has(ep.vlan)) {
-        groupedByVlan.set(ep.vlan, []);
+      // Extract subnet from IP (first 3 octets)
+      const ipParts = ep.ip.split('.');
+      const subnet = ipParts.slice(0, 3).join('.');
+      const groupKey = `${ep.vlan}|${subnet}`;
+
+      if (!groupedByVlanAndSubnet.has(groupKey)) {
+        groupedByVlanAndSubnet.set(groupKey, []);
       }
-      groupedByVlan.get(ep.vlan)!.push(ep);
+      groupedByVlanAndSubnet.get(groupKey)!.push(ep);
     });
 
     const newEntries: ValidationEntry[] = [];
 
-    Array.from(groupedByVlan.entries()).forEach(([vlan, endpoints], idx) => {
+    Array.from(groupedByVlanAndSubnet.entries()).forEach(([groupKey, endpoints], idx) => {
+      const [vlan] = groupKey.split('|');
+
+      // Collect all unique paths for this group
       const allPaths = Array.from(new Set(endpoints.map(ep => ep.path)));
       const pathIPMap = new Map<string, string>();
       endpoints.forEach(ep => {
@@ -165,7 +173,6 @@ function App() {
         allPaths
       );
 
-      // If only one EPG matches, use it; otherwise create entry with best match
       newEntries.push({
         id: Date.now().toString() + idx,
         endpointInput: '',
