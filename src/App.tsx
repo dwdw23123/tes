@@ -127,56 +127,65 @@ function App() {
     setPathAttachments(parsedMoquery);
     setAutoEndpoints(parsedEndpoints);
 
-    // Group by VLAN and IP subnet (to differentiate different EPGs)
-    const groupedByVlanAndSubnet = new Map<string, AutoModeEndpoint[]>();
-    parsedEndpoints.forEach(ep => {
-      // Extract subnet from IP (first 3 octets)
-      const ipParts = ep.ip.split('.');
-      const subnet = ipParts.slice(0, 3).join('.');
-      const groupKey = `${ep.vlan}|${subnet}`;
-
-      if (!groupedByVlanAndSubnet.has(groupKey)) {
-        groupedByVlanAndSubnet.set(groupKey, []);
-      }
-      groupedByVlanAndSubnet.get(groupKey)!.push(ep);
-    });
-
     const newEntries: ValidationEntry[] = [];
+    const processedEpgs = new Set<string>();
 
-    Array.from(groupedByVlanAndSubnet.entries()).forEach(([groupKey, endpoints], idx) => {
-      const [vlan] = groupKey.split('|');
+    // Get all unique EPGs from moquery
+    const uniqueEpgs = Array.from(new Set(parsedMoquery.map(att => att.epg)));
 
-      // Collect all unique paths for this group
-      const allPaths = Array.from(new Set(endpoints.map(ep => ep.path)));
-      const pathIPMap = new Map<string, string>();
-      endpoints.forEach(ep => {
-        pathIPMap.set(ep.path, ep.ip);
+    uniqueEpgs.forEach((epg, idx) => {
+      if (processedEpgs.has(epg)) return;
+      processedEpgs.add(epg);
+
+      // Extract VLAN from EPG
+      const vlan = extractVlanFromEpg(epg);
+      if (!vlan) return;
+
+      // Extract IP and CIDR from EPG (format: EPG-VLANxxx-10.254.XX.XX-YY)
+      const epgIpMatch = epg.match(/(\d+\.\d+\.\d+\.\d+)-(\d+)$/);
+      let epgIp = '';
+      let epgCidr = '';
+      if (epgIpMatch) {
+        epgIp = epgIpMatch[1];
+        epgCidr = epgIpMatch[2];
+      }
+
+      // Get all moquery paths for this EPG
+      const moqueryPathsForEpg = parsedMoquery.filter(att => att.epg === epg).map(att => att.path);
+      if (moqueryPathsForEpg.length === 0) return;
+
+      // Get all endpoint paths from APIC that match this VLAN
+      const endpointPathsForVlan = new Set<string>();
+      parsedEndpoints.forEach(ep => {
+        if (ep.vlan === vlan) {
+          endpointPathsForVlan.add(ep.path);
+        }
       });
+
+      // Combine all paths
+      const allPaths = Array.from(new Set([...moqueryPathsForEpg, ...endpointPathsForVlan]));
 
       const endpointData: EndpointData = {
         vlan,
-        ip: endpoints[0]?.ip || '',
+        ip: epgIp || (parsedEndpoints.find(ep => ep.vlan === vlan)?.ip || ''),
         paths: allPaths,
         pod: '',
-        pathsWithIPs: pathIPMap
+        pathsWithIPs: new Map()
       };
 
+      // Set IP mapping for paths
+      parsedEndpoints.forEach(ep => {
+        if (ep.vlan === vlan) {
+          endpointData.pathsWithIPs?.set(ep.path, ep.ip);
+        }
+      });
+
       const results = validateVlanAllowances(endpointData, parsedMoquery);
-
-      // Get all EPGs from moquery for this VLAN
-      const epgList = epgsByVlan.get(vlan) || [endpoints[0]?.epg || `VLAN${vlan}`];
-
-      // Select best matching EPG based on endpoint IP and path info
-      const bestEpg = selectBestEpgMatch(
-        endpoints[0]?.ip || '',
-        epgList,
-        allPaths
-      );
 
       newEntries.push({
         id: Date.now().toString() + idx,
         endpointInput: '',
-        epgName: bestEpg || epgList[0] || `VLAN${vlan}`,
+        epgName: epg,
         results,
         endpointData
       });
